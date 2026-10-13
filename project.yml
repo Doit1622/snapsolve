@@ -1,0 +1,35 @@
+name: SnapSolve
+options:
+  bundleIdPrefix: de.frederik
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    # Eigene Team-ID eintragen oder in Xcode unter "Signing & Capabilities" wählen.
+    # DEVELOPMENT_TEAM: XXXXXXXXXX
+targets:
+  SnapSolve:
+    type: application
+    platform: iOS
+    sources:
+      - SnapSolve
+    info:
+      path: SnapSolve/Info.plist
+      properties:
+        CFBundleDisplayName: SnapSolve
+        NSCameraUsageDescription: SnapSolve fotografiert in Intervallen Aufgaben, um sie von Claude lösen zu lassen.
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: de.frederik.SnapSolve
+        CODE_SIGN_STYLE: Automatic

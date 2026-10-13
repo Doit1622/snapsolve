@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SnapSolve">
+<meta name="theme-color" content="#0e1116">
+<title>SnapSolve</title>
+<style>
+  /* Layout: Vollbild-Kamerasucher, darüber Statusleiste und Steuerung; Einstellungen und Lock als Overlays. */
+  :root {
+    --bg: #0e1116;
+    --surface: #171c24;
+    --surface-2: #1f2630;
+    --line: #2b3440;
+    --fg: #eef2f7;
+    --muted: #93a1b2;
+    --accent: #5b8cff;
+    --accent-ink: #0b1220;
+    --good: #46c08a;
+    --warn: #e0b64a;
+    --bad: #e2695f;
+    --radius: 14px;
+    color-scheme: dark;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+  /* ---------- App-Gerüst ---------- */
+  #app {
+    position: fixed; inset: 0;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+  }
+  header .brand { font-weight: 700; letter-spacing: .04em; font-size: 15px; }
+  header .spacer { flex: 1; }
+  .iconbtn {
+    width: 40px; height: 40px; display: grid; place-items: center;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; color: var(--fg);
+  }
+  .iconbtn:active { background: var(--surface-2); }
+
+  /* ---------- Sucher ---------- */
+  .viewer {
+    position: relative; margin: 0 16px; min-width: 0;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; background: #000;
+  }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .viewer.running { border-color: var(--accent); }
+
+  .statuschip {
+    position: absolute; left: 10px; top: 10px; right: 10px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 10px;
+    background: rgba(10,14,20,.68); backdrop-filter: blur(8px);
+    font-size: 13px; color: var(--fg);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.live { background: var(--bad); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.ok { background: var(--good); }
+  .dot.work { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none !important } }
+
+  .answer {
+    position: absolute; left: 10px; right: 10px; bottom: 10px;
+    max-height: 45%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding: 12px 14px; border-radius: 10px;
+    background: rgba(10,14,20,.78); backdrop-filter: blur(8px);
+    font-size: 15px; line-height: 1.45; -webkit-user-select: text; user-select: text;
+  }
+  .answer:empty { display: none; }
+
+  /* ---------- Steuerung ---------- */
+  .controls { display: grid; gap: 12px; padding: 12px 16px 16px; }
+  .row { display: flex; gap: 10px; }
+  .seg {
+    display: flex; gap: 4px; padding: 4px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    overflow-x: auto; min-width: 0;
+  }
+  .seg button {
+    flex: 1 0 auto; padding: 8px 12px; border: none; border-radius: 9px;
+    background: transparent; color: var(--muted); font-size: 13px; white-space: nowrap;
+  }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .seg:is(.disabled) { opacity: .5; pointer-events: none; }
+
+  .btn {
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 16px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--surface); font-size: 16px; font-weight: 600;
+  }
+  .btn:active { transform: scale(.99); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .btn.primary.stop { background: var(--bad); }
+  .btn.ghost { flex: 0 0 auto; width: 56px; }
+  .btn:disabled { opacity: .45; }
+
+  /* ---------- Overlays ---------- */
+  .overlay {
+    position: fixed; inset: 0; z-index: 50;
+    padding: calc(env(safe-area-inset-top,0px) + 16px) 16px calc(env(safe-area-inset-bottom,0px) + 16px);
+    background: var(--bg); overflow-y: auto; -webkit-overflow-scrolling: touch;
+  }
+  .sheet { max-width: 560px; margin: 0 auto; display: grid; gap: 18px; }
+  .sheet h2 { margin: 4px 0; font-size: 20px; }
+  fieldset { border: 1px solid var(--line); border-radius: var(--radius); margin: 0; padding: 14px; display: grid; gap: 12px; min-width: 0; }
+  .sheet > *, fieldset > *, label > * { min-width: 0; max-width: 100%; }
+  legend { padding: 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  label { display: grid; gap: 6px; font-size: 14px; }
+  .hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
+  input[type="password"], input[type="text"], select, textarea {
+    width: 100%; padding: 12px; border-radius: 10px;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--fg); font: inherit;
+  }
+  textarea { min-height: 150px; resize: vertical; line-height: 1.45; }
+  .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .switch input { width: 46px; height: 28px; appearance: none; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; position: relative; flex: none; }
+  .switch input:checked { background: var(--accent); border-color: transparent; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch input:checked::after { transform: translateX(18px); }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+  .histlist { display: grid; gap: 10px; }
+  .histitem { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .histitem time { color: var(--muted); font-size: 12px; }
+  .histitem p { margin: 6px 0 0; font-size: 14px; line-height: 1.45; -webkit-user-select: text; user-select: text; }
+
+  /* ---------- Sperrbildschirm: sichtbar AN, nur berührungsgeschützt und abgedunkelt ---------- */
+  #lock {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: rgba(0,0,0,.94); color: #cfd8e3;
+    padding: 24px; text-align: center;
+    touch-action: none;
+  }
+  #lock .mark { font-weight: 700; letter-spacing: .12em; font-size: 14px; color: #9fb0c4; }
+  #lock .lockstatus { font-size: 15px; min-height: 20px; }
+  #lock .activedot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 8px; animation: pulse 1.8s ease-in-out infinite; }
+  #lock .hold { font-size: 13px; color: #7f8ea1; max-width: 280px; line-height: 1.5; }
+  #lock .ring { width: 72px; height: 72px; border-radius: 50%; border: 3px solid rgba(255,255,255,.12); position: relative; display: grid; place-items: center; }
+  #lock .ring .fill { position: absolute; inset: -3px; border-radius: 50%; background: conic-gradient(var(--accent) calc(var(--p,0) * 1%), transparent 0); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); }
+  #lock .ring span { font-size: 22px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom,0px) + 90px); transform: translateX(-50%);
+    z-index: 70; max-width: 90%;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--fg);
+    padding: 10px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.4);
+  }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <span class="brand">SNAPSOLVE</span>
+    <span class="spacer"></span>
+    <button class="iconbtn" id="btnLock" title="Sperren" aria-label="Bildschirm sperren">&#128274;</button>
+    <button class="iconbtn" id="btnHist" title="Verlauf" aria-label="Verlauf">&#9776;</button>
+    <button class="iconbtn" id="btnSettings" title="Einstellungen" aria-label="Einstellungen">&#9881;</button>
+  </header>
+
+  <div class="viewer" id="viewer">
+    <video id="video" playsinline autoplay muted></video>
+    <div class="statuschip"><span class="dot" id="dot"></span><span id="status">Bereit</span></div>
+    <div class="answer mono" id="answer" aria-live="polite"></div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="intervalSeg" aria-label="Intervall"></div>
+    <div class="row">
+      <button class="btn primary" id="btnStartStop">Start</button>
+      <button class="btn" id="btnOnce">Einmal</button>
+      <button class="btn ghost" id="btnReplay" title="Erneut vorlesen" aria-label="Erneut vorlesen">&#128266;</button>
+    </div>
+  </div>
+</div>
+
+<!-- Einstellungen -->
+<div class="overlay" id="settings" hidden>
+  <div class="sheet">
+    <h2>Einstellungen</h2>
+
+    <fieldset>
+      <legend>Anthropic API-Key</legend>
+      <label>
+        <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false">
+        <span class="hint">Key von console.anthropic.com. Wird nur lokal in diesem Browser (localStorage) gespeichert und direkt an die Claude-API gesendet.</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Modell</legend>
+      <label>
+        <select id="model">
+          <option value="claude-opus-5-5">Claude Opus 5.5 (beste Qualität)</option>
+          <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (schneller, günstiger)</option>
+          <option value="claude-haiku-5-5">Claude Haiku 5.5 (am günstigsten)</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Sprachausgabe</legend>
+      <div class="switch"><span>Lösung automatisch vorlesen</span><input type="checkbox" id="autoSpeak" checked></div>
+      <div class="switch"><span>Bei „Keine Aufgabe erkennbar“ still bleiben</span><input type="checkbox" id="skipNoTask" checked></div>
+      <label>Stimme
+        <select id="voice"></select>
+      </label>
+      <label>Sprechtempo <span class="mono" id="rateVal">1.0&times;</span>
+        <input type="range" id="rate" min="0.6" max="1.6" step="0.1" value="1">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Anweisung an Claude</legend>
+      <textarea id="systemPrompt" spellcheck="false"></textarea>
+      <button class="btn" id="btnResetPrompt" style="flex:0 0 auto">Standard wiederherstellen</button>
+    </fieldset>
+
+    <button class="btn primary" id="btnCloseSettings">Fertig</button>
+  </div>
+</div>
+
+<!-- Verlauf -->
+<div class="overlay" id="history" hidden>
+  <div class="sheet">
+    <h2>Verlauf</h2>
+    <button class="btn" id="btnClearHist" style="flex:0 0 auto">Leeren</button>
+    <div class="histlist" id="histlist"></div>
+  </div>
+</div>
+
+<!-- Sperre: sichtbar aktiv, nur abgedunkelt und berührungsgeschützt -->
+<div id="lock" hidden>
+  <div class="mark"><span class="activedot"></span>SNAPSOLVE AKTIV</div>
+  <div class="ring"><div class="fill" id="lockFill"></div><span>&#128274;</span></div>
+  <div class="lockstatus mono" id="lockStatus">läuft</div>
+  <div class="hold">Zum Entsperren hier lange drücken (1,5 Sekunden).<br>Der Bildschirm bleibt an, Fehlbedienung ist gesperrt.</div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+
+/* ========== Konstanten & Zustand ========== */
+const DEFAULT_PROMPT =
+`Du bist ein Assistent, der Aufgaben auf Fotos löst. Auf dem Bild sind Aufgaben zu sehen, zum Beispiel Rechenaufgaben, Textaufgaben, Multiple-Choice-Fragen oder Verständnisfragen. Löse jede erkennbare Aufgabe vollständig und korrekt.
+
+Deine Antwort wird per Sprachausgabe vorgelesen. Deshalb:
+- Antworte auf Deutsch in kurzen, klaren Sätzen.
+- Kein Markdown, keine Aufzählungszeichen, keine Tabellen, kein LaTeX.
+- Schreibe Formeln und Ergebnisse so, dass sie vorgelesen gut verständlich sind.
+- Nenne pro Aufgabe zuerst das Ergebnis, danach in höchstens zwei Sätzen den Lösungsweg.
+- Bei Multiple Choice nenne den Buchstaben und den Text der richtigen Antwort.
+
+Wenn auf dem Bild keine Aufgabe erkennbar ist oder das Bild zu unscharf ist, antworte ausschließlich mit: Keine Aufgabe erkennbar.`;
+
+const INTERVALS = [5, 10, 20, 30, 60, 120];
+const MODELS_WITH_FALLBACK = ["claude-opus", "claude-sonnet"];
+
+const settings = {
+  apiKey: "",
+  model: "claude-opus-5-5",
+  interval: 30,
+  autoSpeak: true,
+  skipNoTask: true,
+  rate: 1.0,
+  voiceURI: "",
+  systemPrompt: DEFAULT_PROMPT,
+};
+
+let history = [];
+let running = false;
+let processing = false;
+let loopTimer = null;
+let countdownTimer = null;
+let lastAnswer = "";
+let wakeLock = null;
+let stream = null;
+
+/* ========== Hilfen für Persistenz ========== */
+function loadStore() {
+  try {
+    const raw = localStorage.getItem("snapsolve");
+    if (raw) Object.assign(settings, JSON.parse(raw));
+    const h = localStorage.getItem("snapsolve-history");
+    if (h) history = JSON.parse(h);
+  } catch (e) { /* localStorage evtl. blockiert */ }
+}
+function saveStore() {
+  try { localStorage.setItem("snapsolve", JSON.stringify(settings)); } catch (e) {}
+}
+function saveHistory() {
+  try { localStorage.setItem("snapsolve-history", JSON.stringify(history.slice(0, 50))); } catch (e) {}
+}
+
+/* ========== DOM ========== */
+const $ = (id) => document.getElementById(id);
+const video = $("video"), viewer = $("viewer");
+const statusEl = $("status"), dot = $("dot"), answerEl = $("answer");
+const toastEl = $("toast");
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  dot.className = "dot" + (kind ? " " + kind : "");
+}
+let toastT = null;
+function toast(msg) {
+  toastEl.textContent = msg; toastEl.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { toastEl.hidden = true; }, 3200);
+}
+
+/* ========== Kamera ========== */
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus("Kamera nicht verfügbar (HTTPS nötig)", "live"); return false;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    setStatus("Bereit", "ok");
+    return true;
+  } catch (e) {
+    setStatus("Kein Kamerazugriff: " + (e && e.message ? e.message : e), "live");
+    return false;
+  }
+}
+
+function captureJPEG(maxDim = 1568, quality = 0.8) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const scale = Math.min(1, maxDim / Math.max(vw, vh));
+  const w = Math.round(vw * scale), h = Math.round(vh * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+  const url = canvas.toDataURL("image/jpeg", quality);
+  return url.split(",")[1] || null;
+}
+
+/* ========== Claude API ========== */
+async function solve(base64) {
+  const key = (settings.apiKey || "").trim();
+  if (!key) throw new Error("Kein API-Key hinterlegt. Bitte in den Einstellungen eintragen.");
+
+  const headers = {
+    "content-type": "application/json",
+    "x-api-key": key,
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+  };
+  const body = {
+    model: settings.model,
+    max_tokens: 8000,
+    output_config: { effort: "high" },
+    system: settings.systemPrompt,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64 } },
+        { type: "text", text: "Löse die Aufgaben auf diesem Foto." },
+      ],
+    }],
+  };
+  if (MODELS_WITH_FALLBACK.some((p) => settings.model.startsWith(p))) {
+    body.fallbacks = "default";
+    headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
+  }
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = (data && data.error && data.error.message) || ("HTTP " + res.status);
+    throw new Error("API-Fehler: " + msg);
+  }
+  if (data && data.stop_reason === "refusal") {
+    throw new Error("Claude hat die Anfrage abgelehnt.");
+  }
+  const text = ((data && data.content) || [])
+    .filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+  if (!text) throw new Error("Claude hat keinen Text zurückgegeben.");
+  return text;
+}
+
+/* ========== Sprachausgabe ========== */
+let voices = [];
+function loadVoices() {
+  voices = (window.speechSynthesis ? speechSynthesis.getVoices() : [])
+    .filter((v) => v.lang && v.lang.toLowerCase().startsWith("de"));
+  const sel = $("voice");
+  sel.innerHTML = "";
+  const auto = document.createElement("option");
+  auto.value = ""; auto.textContent = "Automatisch (Deutsch)";
+  sel.appendChild(auto);
+  voices.forEach((v) => {
+    const o = document.createElement("option");
+    o.value = v.voiceURI; o.textContent = v.name + " (" + v.lang + ")";
+    sel.appendChild(o);
+  });
+  sel.value = settings.voiceURI || "";
+}
+if (window.speechSynthesis) {
+  speechSynthesis.onvoiceschanged = loadVoices;
+}
+function speak(text) {
+  return new Promise((resolve) => {
+    if (!window.speechSynthesis) { resolve(); return; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "de-DE";
+    u.rate = settings.rate;
+    const v = voices.find((x) => x.voiceURI === settings.voiceURI);
+    if (v) u.voice = v;
+    u.onend = resolve; u.onerror = resolve;
+    speechSynthesis.speak(u);
+  });
+}
+function stopSpeaking() { if (window.speechSynthesis) speechSynthesis.cancel(); }
+
+/* ========== Wake Lock ========== */
+async function requestWakeLock() {
+  try {
+    if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+  } catch (e) { /* ok */ }
+}
+function releaseWakeLock() {
+  try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) {}
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && running) requestWakeLock();
+});
+
+/* ========== Ein Durchlauf ========== */
+async function processOne() {
+  if (processing) return;
+  processing = true;
+  try {
+    setStatus("Foto wird aufgenommen …", "work");
+    const b64 = captureJPEG();
+    if (!b64) { setStatus("Kein Kamerabild", "live"); return; }
+
+    setStatus("Claude analysiert …", "work");
+    const answer = await solve(b64);
+    lastAnswer = answer;
+    answerEl.textContent = answer;
+
+    history.unshift({ t: Date.now(), text: answer });
+    history = history.slice(0, 50);
+    saveHistory();
+
+    const noTask = answer.toLowerCase().startsWith("keine aufgabe");
+    if (settings.autoSpeak && !(noTask && settings.skipNoTask)) {
+      setStatus("Wird vorgelesen …", "work");
+      updateLockStatus("wird vorgelesen …");
+      await speak(answer);
+    }
+  } catch (e) {
+    setStatus(e && e.message ? e.message : String(e), "live");
+    toast(e && e.message ? e.message : String(e));
+    await new Promise((r) => setTimeout(r, 2500));
+  } finally {
+    processing = false;
+  }
+}
+
+/* ========== Schleife ========== */
+function startLoop() {
+  if (running) return;
+  if (!settings.apiKey.trim()) { openSettings(); toast("Bitte zuerst den API-Key eintragen."); return; }
+  running = true;
+  viewer.classList.add("running");
+  $("btnStartStop").textContent = "Stopp";
+  $("btnStartStop").classList.add("stop");
+  $("btnOnce").disabled = true;
+  $("intervalSeg").classList.add("disabled");
+  requestWakeLock();
+  cycle();
+}
+async function cycle() {
+  if (!running) return;
+  const started = Date.now();
+  await processOne();
+  if (!running) return;
+  const elapsed = Math.floor((Date.now() - started) / 1000);
+  let remaining = Math.max(0, settings.interval - elapsed);
+  clearInterval(countdownTimer);
+  const tick = () => {
+    if (!running) return;
+    if (remaining <= 0) { clearInterval(countdownTimer); cycle(); return; }
+    setStatus("Nächstes Foto in " + remaining + " s", "ok");
+    updateLockStatus("nächstes Foto in " + remaining + " s");
+    remaining--;
+  };
+  tick();
+  countdownTimer = setInterval(tick, 1000);
+}
+function stopLoop() {
+  running = false;
+  clearInterval(countdownTimer);
+  clearTimeout(loopTimer);
+  stopSpeaking();
+  viewer.classList.remove("running");
+  $("btnStartStop").textContent = "Start";
+  $("btnStartStop").classList.remove("stop");
+  $("btnOnce").disabled = false;
+  $("intervalSeg").classList.remove("disabled");
+  releaseWakeLock();
+  setStatus("Bereit", "ok");
+}
+
+/* ========== Sperre ========== */
+function updateLockStatus(txt) {
+  if (!$("lock").hidden) $("lockStatus").textContent = txt;
+}
+function lockScreen() {
+  $("lockStatus").textContent = running ? "läuft" : "pausiert";
+  $("lock").hidden = false;
+  toast("Gesperrt. Lange drücken zum Entsperren.");
+}
+let holdStart = 0, holdRAF = 0;
+function beginHold() {
+  holdStart = Date.now();
+  const step = () => {
+    const p = Math.min(100, (Date.now() - holdStart) / 1500 * 100);
+    $("lockFill").style.setProperty("--p", p.toFixed(0));
+    if (p >= 100) { endHold(true); return; }
+    holdRAF = requestAnimationFrame(step);
+  };
+  holdRAF = requestAnimationFrame(step);
+}
+function endHold(unlock) {
+  cancelAnimationFrame(holdRAF);
+  $("lockFill").style.setProperty("--p", 0);
+  if (unlock) { $("lock").hidden = true; }
+}
+(function wireLock() {
+  const lock = $("lock");
+  lock.addEventListener("pointerdown", (e) => { e.preventDefault(); beginHold(); });
+  lock.addEventListener("pointerup", () => endHold(false));
+  lock.addEventListener("pointercancel", () => endHold(false));
+  lock.addEventListener("pointerleave", () => endHold(false));
+})();
+
+/* ========== Overlays ========== */
+function openSettings() { fillSettings(); $("settings").hidden = false; }
+function openHistory() { renderHistory(); $("history").hidden = false; }
+
+function fillSettings() {
+  $("apiKey").value = settings.apiKey;
+  $("model").value = settings.model;
+  $("autoSpeak").checked = settings.autoSpeak;
+  $("skipNoTask").checked = settings.skipNoTask;
+  $("rate").value = settings.rate;
+  $("rateVal").innerHTML = settings.rate.toFixed(1) + "&times;";
+  $("systemPrompt").value = settings.systemPrompt;
+  loadVoices();
+}
+function renderHistory() {
+  const list = $("histlist");
+  list.innerHTML = "";
+  if (!history.length) {
+    const p = document.createElement("p"); p.className = "hint"; p.textContent = "Noch keine Lösungen.";
+    list.appendChild(p); return;
+  }
+  history.forEach((h) => {
+    const d = document.createElement("div"); d.className = "histitem";
+    const t = document.createElement("time"); t.textContent = new Date(h.t).toLocaleString("de-DE");
+    const p = document.createElement("p"); p.textContent = h.text;
+    d.appendChild(t); d.appendChild(p); list.appendChild(d);
+  });
+}
+
+/* ========== Intervall-Auswahl ========== */
+function buildIntervalSeg() {
+  const seg = $("intervalSeg");
+  seg.innerHTML = "";
+  INTERVALS.forEach((s) => {
+    const b = document.createElement("button");
+    b.textContent = s >= 60 ? (s / 60) + " min" : s + " s";
+    b.setAttribute("aria-pressed", s === settings.interval ? "true" : "false");
+    b.addEventListener("click", () => {
+      if (running) return;
+      settings.interval = s; saveStore();
+      [...seg.children].forEach((c) => c.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+    });
+    seg.appendChild(b);
+  });
+}
+
+/* ========== Event-Verdrahtung ========== */
+$("btnStartStop").addEventListener("click", () => running ? stopLoop() : startLoop());
+$("btnOnce").addEventListener("click", async () => {
+  if (running || processing) return;
+  if (!settings.apiKey.trim()) { openSettings(); toast("Bitte zuerst den API-Key eintragen."); return; }
+  await processOne();
+  if (!running) setStatus("Bereit", "ok");
+});
+$("btnReplay").addEventListener("click", () => { if (lastAnswer) speak(lastAnswer); });
+$("btnLock").addEventListener("click", lockScreen);
+$("btnSettings").addEventListener("click", openSettings);
+$("btnHist").addEventListener("click", openHistory);
+$("btnCloseSettings").addEventListener("click", () => { $("settings").hidden = true; });
+$("btnClearHist").addEventListener("click", () => { history = []; saveHistory(); renderHistory(); });
+$("btnResetPrompt").addEventListener("click", () => { $("systemPrompt").value = DEFAULT_PROMPT; });
+
+$("apiKey").addEventListener("input", (e) => { settings.apiKey = e.target.value; saveStore(); });
+$("model").addEventListener("change", (e) => { settings.model = e.target.value; saveStore(); });
+$("autoSpeak").addEventListener("change", (e) => { settings.autoSpeak = e.target.checked; saveStore(); });
+$("skipNoTask").addEventListener("change", (e) => { settings.skipNoTask = e.target.checked; saveStore(); });
+$("voice").addEventListener("change", (e) => { settings.voiceURI = e.target.value; saveStore(); });
+$("rate").addEventListener("input", (e) => {
+  settings.rate = parseFloat(e.target.value);
+  $("rateVal").innerHTML = settings.rate.toFixed(1) + "&times;"; saveStore();
+});
+$("systemPrompt").addEventListener("input", (e) => { settings.systemPrompt = e.target.value; saveStore(); });
+
+// Externe Tastatur (falls vorhanden): L sperrt.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "l" && !e.metaKey && !e.ctrlKey && document.activeElement.tagName !== "TEXTAREA" && document.activeElement.tagName !== "INPUT") {
+    if ($("lock").hidden) lockScreen();
+  }
+});
+
+/* ========== Start ========== */
+loadStore();
+buildIntervalSeg();
+loadVoices();
+startCamera();
+if (!settings.apiKey.trim()) openSettings();
+</script>
+</body>
+</html>
